@@ -1,44 +1,60 @@
-use std::io::{stdout, Write};
+use std::io::{stdout, Stdout, Write};
 
 use crossterm::{
     cursor::MoveTo,
     event::{self, read},
-    terminal, ExecutableCommand, QueueableCommand,
+    style, terminal, ExecutableCommand, QueueableCommand,
 };
 
 use super::action::Action;
 use super::mode::Mode;
 
 pub struct Editor {
+    stdout: Stdout,
     mode: Mode,
+    size: (u16, u16),
     cx: u16,
     cy: u16,
 }
 
 impl Editor {
-    fn default() -> Self {
-        Editor {
+    fn default() -> anyhow::Result<Editor> {
+        Ok(Editor {
             mode: Mode::Normal,
             cx: 0,
+            size: terminal::size()?,
+            stdout: stdout(),
             cy: 0,
-        }
+        })
     }
 
-    pub fn new() -> Self {
+    pub fn new() -> anyhow::Result<Editor> {
         Self::default()
     }
 
-    pub fn init_editor(&mut self) -> anyhow::Result<()> {
-        let mut stdout = stdout();
+    fn draw(&mut self) -> anyhow::Result<()> {
+        self.draw_statusline()?;
+        self.stdout.queue(MoveTo(self.cx, self.cy))?;
+        self.stdout.flush()?;
+        Ok(())
+    }
 
+    fn draw_statusline(&mut self) -> anyhow::Result<()> {
+        println!("the size is {:?}" ,self.cx); 
+        self.stdout.execute(MoveTo(0,  self.size.1 - 2))?;
+        self.stdout.queue(style::Print("Status Line"))?;
+        Ok(())
+    }
+
+    pub fn init_editor(&mut self) -> anyhow::Result<()> {
         terminal::enable_raw_mode()?;
-        stdout.execute(terminal::EnterAlternateScreen)?;
-        stdout.execute(terminal::Clear(terminal::ClearType::All))?;
-        stdout.execute(MoveTo(self.cx, self.cy))?;
+        self.stdout.execute(terminal::EnterAlternateScreen)?;
+        self.stdout
+            .execute(terminal::Clear(terminal::ClearType::All))?;
+        self.stdout.execute(MoveTo(self.cx, self.cy))?;
 
         loop {
-            stdout.queue(MoveTo(self.cx, self.cy))?;
-            stdout.flush()?;
+            self.draw()?;
             let event = self.handle_event(read()?)?;
             if let Some(event) = event {
                 match event {
@@ -61,7 +77,7 @@ impl Editor {
             };
         }
 
-        stdout.execute(terminal::LeaveAlternateScreen)?;
+        self.stdout.execute(terminal::LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;
 
         Ok(())
@@ -96,7 +112,7 @@ impl Editor {
             event::Event::Key(key) => match key.code {
                 event::KeyCode::Esc => Ok(Some(Action::EnterMode(Mode::Normal))),
                 event::KeyCode::Char(c) => {
-                    println!("{c}");
+                    self.stdout.queue(style::Print(c))?;
                     self.cx += 1;
                     Ok(None)
                 }
