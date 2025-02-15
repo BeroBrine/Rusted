@@ -1,30 +1,10 @@
-use std::io::stdout;
+pub mod editor;
 
-use crossterm::{cursor::MoveTo, event::read, terminal, ExecutableCommand};
+use editor::main_editor::Editor;
 
 fn main() -> anyhow::Result<()> {
-    let mut stdout = stdout();
-    let cx = 0;
-    let cy = 0;
-
-    terminal::enable_raw_mode()?;
-
-    stdout.execute(terminal::EnterAlternateScreen)?;
-    stdout.execute(terminal::Clear(terminal::ClearType::All))?;
-
-    stdout.execute(MoveTo(cx, cy))?;
-    loop {
-        match read()? {
-            crossterm::event::Event::Key(event) => match event.code {
-                crossterm::event::KeyCode::Char('q') => break,
-                _ => (),
-            },
-            _ => (),
-        }
-    }
-
-    stdout.execute(terminal::LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()?;
+    let mut editor = Editor::new();
+    editor.init_editor()?;
 
     Ok(())
 }
