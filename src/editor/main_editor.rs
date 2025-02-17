@@ -9,50 +9,72 @@ use crossterm::{
 
 use super::action::Action;
 use super::mode::Mode;
+use crate::Buffer;
 
 pub struct Editor {
+    buffer: Buffer,
     stdout: Stdout,
     mode: Mode,
     size: (u16, u16),
+    vtop: u16,
+    vleft: u16,
+    vheight: u16,
+    vwidth: u16,
     cx: u16,
     cy: u16,
 }
 
-impl Drop for Editor {
-    fn drop(&mut self) {
-        let _ = self.stdout.flush();
-        let _ = self.stdout.execute(terminal::LeaveAlternateScreen);
-        let _ = terminal::disable_raw_mode();
-    }
-}
-
 impl Editor {
-    fn default() -> anyhow::Result<Editor> {
+    pub fn new(file_buffer: Buffer) -> anyhow::Result<Self> {
+        let size = terminal::size()?;
         Ok(Editor {
+            buffer: file_buffer,
             mode: Mode::Normal,
+            vtop: 0,
+            vleft: 0,
             cx: 0,
-            size: terminal::size()?,
-            stdout: stdout(),
             cy: 0,
+            vheight: size.1 - 2,
+            vwidth: size.0,
+            size,
+            stdout: stdout(),
         })
     }
 
-    pub fn new() -> anyhow::Result<Editor> {
-        Self::default()
-    }
-
     fn draw(&mut self) -> anyhow::Result<()> {
+        self.draw_viewport()?;
         self.draw_statusline()?;
         self.stdout.queue(MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
+    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
+        let vwidth = self.vwidth;
+        for i in 0..self.vheight {
+            let line = self.viewport_line(i);
+            let print_line = match line {
+                Some(val) => val,
+                None => String::new(),
+            };
+
+            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
+            let format_string = format!("{print_line:<width$}", width = vwidth as usize);
+            self.stdout.queue(style::Print(format_string))?;
+        }
+        Ok(())
+    }
+
+    fn viewport_line(&mut self, n: u16) -> Option<String> {
+        let buf_line = self.vtop + n;
+        self.buffer.get(buf_line as usize)
+    }
+
     fn draw_statusline(&mut self) -> anyhow::Result<()> {
         self.stdout.execute(MoveTo(0, self.size.1 - 2))?;
         let mode = self.get_mode().to_uppercase();
         let pos = format!(" {}:{} ", self.cx, self.cy);
-        let file = format!(" src/main.rs");
+        let file = format!(" {} ", self.buffer.file.as_deref().unwrap_or("No Name"));
         let file_width = self.size.0 as usize - mode.len() - pos.len() - 2; // -2 for the
                                                                             // seperators in mode
         self.stdout
@@ -104,6 +126,12 @@ impl Editor {
         ))?;
         Ok(())
     }
+    fn get_line_length(&self) -> u16 {
+        if let Some(val) = self.buffer.get(self.cy as usize) {
+            return val.len() as u16;
+        }
+        0
+    }
 
     pub fn init_editor(&mut self) -> anyhow::Result<()> {
         terminal::enable_raw_mode()?;
@@ -118,12 +146,30 @@ impl Editor {
             if let Some(event) = event {
                 match event {
                     Action::Quit => break,
-                    Action::MoveRight => self.cx = self.cx.saturating_add(1),
+                    Action::MoveRight => {
+                        self.cx = self.cx.saturating_add(1);
+                        if self.cx >= self.get_line_length() {
+                            self.cx = self.get_line_length();
+                        }
+
+                        if self.cx >= self.vwidth {
+                            self.cx = self.vwidth;
+                        }
+                    }
                     Action::MoveLeft => {
                         self.cx = self.cx.saturating_sub(1);
+                        if self.cx < self.vleft {
+                            self.cx = self.vleft;
+                        }
                     }
                     Action::MoveDown => {
                         self.cy = self.cy.saturating_add(1);
+                        if self.cx >= self.get_line_length() {
+                            self.cx = self.get_line_length();
+                        }
+                        if self.cy >= self.vheight as u16 {
+                            self.cy = self.vheight as u16 - 1;
+                        }
                     }
                     Action::MoveUp => {
                         self.cy = self.cy.saturating_sub(1);
@@ -192,5 +238,13 @@ impl Editor {
             Mode::Insert => String::from("Insert"),
             Mode::Normal => String::from("Normal"),
         }
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        let _ = self.stdout.flush();
+        let _ = self.stdout.execute(terminal::LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
     }
 }
