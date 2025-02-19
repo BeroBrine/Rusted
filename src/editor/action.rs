@@ -6,7 +6,13 @@ pub enum Action {
     MoveDown,
     MoveLeft,
     MoveRight,
+    MoveToEndOfLine,
+    MoveToBeginningOfLine,
+    InsertCharCursorPos(char),
+    DeleteCharCursorPos,
     PageUp,
     PageDown,
+    DeleteFullLine,
+    EnterWaitingMode(char),
     EnterMode(Mode),
 }

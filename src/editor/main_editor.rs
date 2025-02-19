@@ -22,6 +22,7 @@ pub struct Editor {
     vwidth: u16,
     cx: u16,
     cy: u16,
+    waiting_cmd: Option<char>,
 }
 
 impl Editor {
@@ -37,6 +38,7 @@ impl Editor {
             vheight: size.1 - 2,
             vwidth: size.0,
             size,
+            waiting_cmd: None,
             stdout: stdout(),
         })
     }
@@ -134,6 +136,10 @@ impl Editor {
         0
     }
 
+    fn get_buf_line(&self) -> u16 {
+        self.vtop + self.cy
+    }
+
     pub fn init_editor(&mut self) -> anyhow::Result<()> {
         terminal::enable_raw_mode()?;
         self.stdout.execute(terminal::EnterAlternateScreen)?;
@@ -145,6 +151,8 @@ impl Editor {
             self.draw()?;
             let event = self.handle_event(read()?)?;
             let buf_end = self.buffer.lines.len() as u16;
+            let line_length = self.get_line_length();
+            let line_no = self.get_buf_line();
             if let Some(event) = event {
                 match &event {
                     Action::Quit => break,
@@ -162,6 +170,30 @@ impl Editor {
                     }
                     Action::MoveUp => {
                         self.cy = self.cy.saturating_sub(1);
+                    }
+                    Action::MoveToEndOfLine => {
+                        self.cx = line_length - 1;
+                    }
+                    Action::InsertCharCursorPos(c) => {
+                        self.buffer.insert_char(self.cx, line_no, *c);
+                        self.cx += 1;
+                    }
+                    Action::EnterWaitingMode(char) => {
+                        log!("entering waiting mode: {} \n", char);
+                        self.waiting_cmd = Some(*char);
+                    }
+                    Action::DeleteFullLine => {
+                        log!("deleting line \n");
+                        self.buffer.delete_line(line_no)
+                    }
+                    Action::DeleteCharCursorPos => {
+                        let line_no = self.get_buf_line();
+                        if self.cx < line_length {
+                            self.buffer.delete_char(self.cx, line_no);
+                        }
+                    }
+                    Action::MoveToBeginningOfLine => {
+                        self.cx = 0;
                     }
                     Action::PageUp => {
                         if self.vtop > 0 {
@@ -224,7 +256,7 @@ impl Editor {
                         self.vtop += 1;
                     }
                 }
-                if self.cy + self.vtop >= buf_end + 1{
+                if self.cy + self.vtop >= buf_end + 1 {
                     self.cy = buf_end.saturating_sub(self.vtop);
                 }
             }
@@ -245,6 +277,10 @@ impl Editor {
     }
 
     fn handle_normal_mode(&mut self, event: event::Event) -> anyhow::Result<Option<Action>> {
+        if let Some(char) = self.waiting_cmd {
+            self.waiting_cmd = None;
+            return self.handle_wait_event(char, event);
+        }
         match event {
             event::Event::Key(ev) => {
                 let code = ev.code;
@@ -261,6 +297,8 @@ impl Editor {
                         self.stdout.execute(cursor::EnableBlinking)?;
                         Ok(Some(Action::EnterMode(Mode::Insert)))
                     }
+                    event::KeyCode::Char('$') => Ok(Some(Action::MoveToEndOfLine)),
+                    event::KeyCode::Char('0') => Ok(Some(Action::MoveToBeginningOfLine)),
                     event::KeyCode::Char('f') => {
                         if matches!(modifier, KeyModifiers::CONTROL) {
                             Ok(Some(Action::PageDown))
@@ -275,6 +313,9 @@ impl Editor {
                             Ok(None)
                         }
                     }
+
+                    event::KeyCode::Char('d') => Ok(Some(Action::EnterWaitingMode('d'))),
+                    event::KeyCode::Char('x') => Ok(Some(Action::DeleteCharCursorPos)),
 
                     _ => Ok(None),
                 }
@@ -291,13 +332,23 @@ impl Editor {
                     self.stdout.execute(cursor::DisableBlinking)?;
                     Ok(Some(Action::EnterMode(Mode::Normal)))
                 }
-                event::KeyCode::Char(c) => {
-                    self.stdout.queue(style::Print(c))?;
-                    self.cx += 1;
-                    Ok(None)
-                }
+                event::KeyCode::Char(c) => Ok(Some(Action::InsertCharCursorPos(c))),
                 _ => Ok(None),
             },
+            _ => Ok(None),
+        }
+    }
+
+    fn handle_wait_event(&mut self, c: char, ev: event::Event) -> anyhow::Result<Option<Action>> {
+        match c {
+            'd' => match ev {
+                event::Event::Key(key) => match key.code {
+                    event::KeyCode::Char('d') => Ok(Some(Action::DeleteFullLine)),
+                    _ => Ok(None),
+                },
+                _ => Ok(None),
+            },
+
             _ => Ok(None),
         }
     }

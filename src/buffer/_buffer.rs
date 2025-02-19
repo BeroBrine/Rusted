@@ -26,4 +26,21 @@ impl Buffer {
         }
         None
     }
+
+    pub fn insert_char(&mut self, x: u16, y: u16, c: char) {
+        let line = self.lines.get_mut(y as usize);
+        if let Some(line) = line {
+            line.insert(x as usize, c);
+        }
+    }
+    pub fn delete_char(&mut self, x: u16, y: u16) {
+        let line = self.lines.get_mut(y as usize);
+        if let Some(line) = line {
+            line.remove(x as usize);
+        }
+    }
+
+    pub fn delete_line(&mut self, line_no: u16) {
+        self.lines.remove(line_no as usize);
+    }
 }
