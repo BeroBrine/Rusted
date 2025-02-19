@@ -6,6 +6,7 @@ pub enum Action {
     MoveDown,
     MoveLeft,
     MoveRight,
+    PageUp,
+    PageDown,
     EnterMode(Mode),
 }
-

@@ -2,14 +2,14 @@ use std::io::{stdout, Stdout, Write};
 
 use crossterm::{
     cursor::{self, MoveTo},
-    event::{self, read},
+    event::{self, read, KeyModifiers},
     style::{self, Color, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
 
 use super::action::Action;
 use super::mode::Mode;
-use crate::Buffer;
+use crate::{log, Buffer};
 
 pub struct Editor {
     buffer: Buffer,
@@ -73,7 +73,7 @@ impl Editor {
     fn draw_statusline(&mut self) -> anyhow::Result<()> {
         self.stdout.execute(MoveTo(0, self.size.1 - 2))?;
         let mode = self.get_mode().to_uppercase();
-        let pos = format!(" {}:{} ", self.cx, self.cy);
+        let pos = format!(" {}:{} ", self.cx, self.cy + self.vtop);
         let file = format!(" {} ", self.buffer.file.as_deref().unwrap_or("No Name"));
         let file_width = self.size.0 as usize - mode.len() - pos.len() - 2; // -2 for the
                                                                             // seperators in mode
@@ -127,7 +127,8 @@ impl Editor {
         Ok(())
     }
     fn get_line_length(&self) -> u16 {
-        if let Some(val) = self.buffer.get(self.cy as usize) {
+        let line_in_buf = self.cy + self.vtop;
+        if let Some(val) = self.buffer.get(line_in_buf as usize) {
             return val.len() as u16;
         }
         0
@@ -143,18 +144,12 @@ impl Editor {
         loop {
             self.draw()?;
             let event = self.handle_event(read()?)?;
+            let buf_end = self.buffer.lines.len() as u16;
             if let Some(event) = event {
-                match event {
+                match &event {
                     Action::Quit => break,
                     Action::MoveRight => {
                         self.cx = self.cx.saturating_add(1);
-                        if self.cx >= self.get_line_length() {
-                            self.cx = self.get_line_length();
-                        }
-
-                        if self.cx >= self.vwidth {
-                            self.cx = self.vwidth;
-                        }
                     }
                     Action::MoveLeft => {
                         self.cx = self.cx.saturating_sub(1);
@@ -164,22 +159,76 @@ impl Editor {
                     }
                     Action::MoveDown => {
                         self.cy = self.cy.saturating_add(1);
-                        if self.cx >= self.get_line_length() {
-                            self.cx = self.get_line_length();
-                        }
-                        if self.cy >= self.vheight as u16 {
-                            self.cy = self.vheight as u16 - 1;
-                        }
                     }
                     Action::MoveUp => {
                         self.cy = self.cy.saturating_sub(1);
+                    }
+                    Action::PageUp => {
+                        if self.vtop > 0 {
+                            self.vtop = self.vtop.saturating_sub(self.vheight);
+                        }
+                        if self.vtop == 0 {
+                            self.cy = 0;
+                        }
+                    }
+                    Action::PageDown => {
+                        if self.vtop + self.vheight < buf_end {
+                            self.vtop += self.vheight;
+                        }
+                        if self.vtop + self.vheight > buf_end {
+                            self.cy = buf_end.saturating_sub(self.vtop);
+                        }
                     }
                     Action::EnterMode(mode) => match mode {
                         Mode::Insert => self.mode = Mode::Insert,
                         Mode::Normal => self.mode = Mode::Normal,
                     },
                 };
+                self.check_bounds(&event, buf_end)?;
             };
+        }
+
+        Ok(())
+    }
+
+    fn check_bounds(&mut self, action: &Action, buf_end: u16) -> anyhow::Result<()> {
+        let line_length = self.get_line_length();
+        match action {
+            Action::MoveRight => {
+                if self.cx >= line_length {
+                    self.cx = line_length.saturating_sub(1);
+                }
+
+                if self.cx >= self.vwidth {
+                    self.cx = self.vwidth;
+                }
+            }
+
+            Action::MoveUp => {
+                if self.cx >= line_length {
+                    self.cx = line_length.saturating_sub(1);
+                }
+                if self.cy == 0 {
+                    if self.vtop > 0 {
+                        self.vtop = self.vtop.saturating_sub(1);
+                    }
+                }
+            }
+            Action::MoveDown => {
+                if self.cx >= self.get_line_length() {
+                    self.cx = self.get_line_length();
+                }
+                if self.cy >= self.vheight as u16 {
+                    self.cy = self.vheight.saturating_sub(1) as u16;
+                    if self.vtop + self.vheight < buf_end {
+                        self.vtop += 1;
+                    }
+                }
+                if self.cy + self.vtop >= buf_end + 1{
+                    self.cy = buf_end.saturating_sub(self.vtop);
+                }
+            }
+            _ => (),
         }
 
         Ok(())
@@ -197,19 +246,39 @@ impl Editor {
 
     fn handle_normal_mode(&mut self, event: event::Event) -> anyhow::Result<Option<Action>> {
         match event {
-            event::Event::Key(ev) => match ev.code {
-                event::KeyCode::Char('q') => Ok(Some(Action::Quit)),
-                event::KeyCode::Char('h') | event::KeyCode::Left => Ok(Some(Action::MoveLeft)),
-                event::KeyCode::Char('j') | event::KeyCode::Down => Ok(Some(Action::MoveDown)),
-                event::KeyCode::Char('k') | event::KeyCode::Up => Ok(Some(Action::MoveUp)),
-                event::KeyCode::Char('l') | event::KeyCode::Right => Ok(Some(Action::MoveRight)),
-                event::KeyCode::Char('i') => {
-                    self.stdout.execute(cursor::EnableBlinking)?;
-                    Ok(Some(Action::EnterMode(Mode::Insert)))
-                }
+            event::Event::Key(ev) => {
+                let code = ev.code;
+                let modifier = ev.modifiers;
+                match code {
+                    event::KeyCode::Char('q') => Ok(Some(Action::Quit)),
+                    event::KeyCode::Char('h') | event::KeyCode::Left => Ok(Some(Action::MoveLeft)),
+                    event::KeyCode::Char('j') | event::KeyCode::Down => Ok(Some(Action::MoveDown)),
+                    event::KeyCode::Char('k') | event::KeyCode::Up => Ok(Some(Action::MoveUp)),
+                    event::KeyCode::Char('l') | event::KeyCode::Right => {
+                        Ok(Some(Action::MoveRight))
+                    }
+                    event::KeyCode::Char('i') => {
+                        self.stdout.execute(cursor::EnableBlinking)?;
+                        Ok(Some(Action::EnterMode(Mode::Insert)))
+                    }
+                    event::KeyCode::Char('f') => {
+                        if matches!(modifier, KeyModifiers::CONTROL) {
+                            Ok(Some(Action::PageDown))
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    event::KeyCode::Char('b') => {
+                        if matches!(modifier, KeyModifiers::CONTROL) {
+                            Ok(Some(Action::PageUp))
+                        } else {
+                            Ok(None)
+                        }
+                    }
 
-                _ => Ok(None),
-            },
+                    _ => Ok(None),
+                }
+            }
 
             _ => Ok(None),
         }
