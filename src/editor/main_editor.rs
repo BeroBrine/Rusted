@@ -49,13 +49,27 @@ impl Editor {
 
     fn draw(&mut self) -> anyhow::Result<()> {
         self.draw_viewport()?;
+        // self.draw_line_number()?;
         self.draw_statusline()?;
         self.stdout.queue(MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
-    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
+
+    // fn draw_line_number(&mut self) -> anyhow::Result<()> {
+    //     let buf_len = self.buffer.lines.len() as u16;
+    //
+    //     for i in 0..self.vheight {
+    //         self.stdout.queue(MoveTo(0 , i))?;
+    //         self.stdout.queue(style::Print(i))?;
+    //     }
+    //
+    //
+    //     Ok(())
+    // }
+
+    fn draw_viewport(&mut self) -> anyhow::Result<()> {
         let vwidth = self.vwidth;
         for i in 0..self.vheight {
             let line = self.viewport_line(i);
@@ -64,7 +78,7 @@ impl Editor {
                 None => String::new(),
             };
 
-            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
+            self.stdout.queue(cursor::MoveTo(3, i as u16))?;
             let format_string = format!("{print_line:<width$}", width = vwidth as usize);
             self.stdout.queue(style::Print(format_string))?;
         }
@@ -133,7 +147,7 @@ impl Editor {
         Ok(())
     }
     pub fn get_line_length(&self) -> u16 {
-        let line_in_buf = self.cy + self.vtop;
+        let line_in_buf = self.get_buf_line();
         if let Some(val) = self.buffer.get(line_in_buf as usize) {
             return val.len() as u16;
         }
@@ -149,7 +163,7 @@ impl Editor {
         self.stdout.execute(terminal::EnterAlternateScreen)?;
         self.stdout
             .execute(terminal::Clear(terminal::ClearType::All))?;
-        self.stdout.execute(MoveTo(self.cx, self.cy))?;
+        self.stdout.execute(MoveTo(0, 1))?;
 
         loop {
             self.draw()?;
@@ -159,7 +173,7 @@ impl Editor {
                     break;
                 }
             }
-            let buf_end = self.buffer.lines.len().saturating_sub(1) as u16;
+            let buf_end = self.buffer.lines.len() as u16;
             self.handle_action(&event);
             self.check_bounds(&event, buf_end)?;
         }
@@ -184,11 +198,6 @@ impl Editor {
                 Action::MoveUp => {
                     if self.cx >= line_length {
                         self.cx = line_length.saturating_sub(1);
-                    }
-                    if self.cy == 0 {
-                        if self.vtop > 0 {
-                            self.vtop = self.vtop.saturating_sub(1);
-                        }
                     }
                 }
                 Action::MoveDown => {
@@ -231,7 +240,6 @@ impl Editor {
             event::Event::Key(ev) => {
                 let code = ev.code;
                 let modifier = ev.modifiers;
-                log!("ev:{:?} \n", ev);
                 match code {
                     event::KeyCode::Char('q') => Ok(Some(Action::Quit)),
                     event::KeyCode::Char('h') | event::KeyCode::Left => Ok(Some(Action::MoveLeft)),
@@ -324,6 +332,11 @@ impl Editor {
                     self.cy = self.cy.saturating_add(1);
                 }
                 Action::MoveUp => {
+                    if self.cy == 0 {
+                        if self.vtop > 0 {
+                            self.vtop = self.vtop.saturating_sub(1);
+                        }
+                    }
                     self.cy = self.cy.saturating_sub(1);
                 }
                 Action::MoveToEndOfLine => {
@@ -339,6 +352,7 @@ impl Editor {
                 Action::DeleteFullLine => {
                     if line_length > 0 {
                         self.undo_actions_list.push(Action::DeleteFullLine);
+                        log!("deleting line at {} \n", line_no);
                         let line = self.buffer.delete_line(line_no);
                         self.undo_buffer_list.push((line, line_no));
                     }
@@ -357,7 +371,7 @@ impl Editor {
                         self.vtop = self.vtop.saturating_sub(self.vheight);
                     }
                     if self.vtop == 0 {
-                        self.cy = 0;
+                        self.cy = 1;
                     }
                 }
                 Action::PageDown => {
@@ -390,7 +404,16 @@ impl Editor {
                 Action::DeleteFullLine => {
                     let tuple = self.undo_buffer_list.pop();
                     if let Some((deleted_string, index)) = tuple {
-                        self.buffer.restore_line(deleted_string, index);
+                        if self.vtop <= index && index <= self.vtop + self.vheight - 1 {
+                            // inside the viewport
+                            self.cy = index.saturating_sub(self.vtop);
+                            self.buffer.restore_line(deleted_string, index);
+                        } else {
+                            // outside the viewport
+                            self.buffer.restore_line(deleted_string, index);
+                            self.vtop = index.saturating_sub(self.vheight / 2);
+                            self.cy = index.saturating_sub(self.vtop);
+                        }
                     }
                 }
                 _ => (),
