@@ -15,4 +15,5 @@ pub enum Action {
     DeleteFullLine,
     EnterWaitingMode(char),
     EnterMode(Mode),
+    Undo,
 }

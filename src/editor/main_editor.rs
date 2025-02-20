@@ -23,6 +23,8 @@ pub struct Editor {
     cx: u16,
     cy: u16,
     waiting_cmd: Option<char>,
+    undo_actions_list: Vec<Action>,
+    undo_buffer_list: Vec<(String, u16)>, // string and the index
 }
 
 impl Editor {
@@ -38,6 +40,8 @@ impl Editor {
             vheight: size.1 - 2,
             vwidth: size.0,
             size,
+            undo_actions_list: vec![],
+            undo_buffer_list: vec![],
             waiting_cmd: None,
             stdout: stdout(),
         })
@@ -128,7 +132,7 @@ impl Editor {
         ))?;
         Ok(())
     }
-    fn get_line_length(&self) -> u16 {
+    pub fn get_line_length(&self) -> u16 {
         let line_in_buf = self.cy + self.vtop;
         if let Some(val) = self.buffer.get(line_in_buf as usize) {
             return val.len() as u16;
@@ -136,7 +140,7 @@ impl Editor {
         0
     }
 
-    fn get_buf_line(&self) -> u16 {
+    pub fn get_buf_line(&self) -> u16 {
         self.vtop + self.cy
     }
 
@@ -150,117 +154,59 @@ impl Editor {
         loop {
             self.draw()?;
             let event = self.handle_event(read()?)?;
-            let buf_end = self.buffer.lines.len() as u16;
-            let line_length = self.get_line_length();
-            let line_no = self.get_buf_line();
-            if let Some(event) = event {
-                match &event {
-                    Action::Quit => break,
-                    Action::MoveRight => {
-                        self.cx = self.cx.saturating_add(1);
-                    }
-                    Action::MoveLeft => {
-                        self.cx = self.cx.saturating_sub(1);
-                        if self.cx < self.vleft {
-                            self.cx = self.vleft;
-                        }
-                    }
-                    Action::MoveDown => {
-                        self.cy = self.cy.saturating_add(1);
-                    }
-                    Action::MoveUp => {
-                        self.cy = self.cy.saturating_sub(1);
-                    }
-                    Action::MoveToEndOfLine => {
-                        self.cx = line_length - 1;
-                    }
-                    Action::InsertCharCursorPos(c) => {
-                        self.buffer.insert_char(self.cx, line_no, *c);
-                        self.cx += 1;
-                    }
-                    Action::EnterWaitingMode(char) => {
-                        log!("entering waiting mode: {} \n", char);
-                        self.waiting_cmd = Some(*char);
-                    }
-                    Action::DeleteFullLine => {
-                        log!("deleting line \n");
-                        self.buffer.delete_line(line_no)
-                    }
-                    Action::DeleteCharCursorPos => {
-                        let line_no = self.get_buf_line();
-                        if self.cx < line_length {
-                            self.buffer.delete_char(self.cx, line_no);
-                        }
-                    }
-                    Action::MoveToBeginningOfLine => {
-                        self.cx = 0;
-                    }
-                    Action::PageUp => {
-                        if self.vtop > 0 {
-                            self.vtop = self.vtop.saturating_sub(self.vheight);
-                        }
-                        if self.vtop == 0 {
-                            self.cy = 0;
-                        }
-                    }
-                    Action::PageDown => {
-                        if self.vtop + self.vheight < buf_end {
-                            self.vtop += self.vheight;
-                        }
-                        if self.vtop + self.vheight > buf_end {
-                            self.cy = buf_end.saturating_sub(self.vtop);
-                        }
-                    }
-                    Action::EnterMode(mode) => match mode {
-                        Mode::Insert => self.mode = Mode::Insert,
-                        Mode::Normal => self.mode = Mode::Normal,
-                    },
-                };
-                self.check_bounds(&event, buf_end)?;
-            };
+            if let Some(ev) = &event {
+                if matches!(ev, Action::Quit) {
+                    break;
+                }
+            }
+            let buf_end = self.buffer.lines.len().saturating_sub(1) as u16;
+            self.handle_action(&event);
+            self.check_bounds(&event, buf_end)?;
         }
 
         Ok(())
     }
 
-    fn check_bounds(&mut self, action: &Action, buf_end: u16) -> anyhow::Result<()> {
+    fn check_bounds(&mut self, action: &Option<Action>, buf_end: u16) -> anyhow::Result<()> {
         let line_length = self.get_line_length();
-        match action {
-            Action::MoveRight => {
-                if self.cx >= line_length {
-                    self.cx = line_length.saturating_sub(1);
-                }
+        if let Some(action) = action {
+            match action {
+                Action::MoveRight => {
+                    if self.cx >= line_length {
+                        self.cx = line_length.saturating_sub(1);
+                    }
 
-                if self.cx >= self.vwidth {
-                    self.cx = self.vwidth;
-                }
-            }
-
-            Action::MoveUp => {
-                if self.cx >= line_length {
-                    self.cx = line_length.saturating_sub(1);
-                }
-                if self.cy == 0 {
-                    if self.vtop > 0 {
-                        self.vtop = self.vtop.saturating_sub(1);
+                    if self.cx >= self.vwidth {
+                        self.cx = self.vwidth;
                     }
                 }
-            }
-            Action::MoveDown => {
-                if self.cx >= self.get_line_length() {
-                    self.cx = self.get_line_length();
-                }
-                if self.cy >= self.vheight as u16 {
-                    self.cy = self.vheight.saturating_sub(1) as u16;
-                    if self.vtop + self.vheight < buf_end {
-                        self.vtop += 1;
+
+                Action::MoveUp => {
+                    if self.cx >= line_length {
+                        self.cx = line_length.saturating_sub(1);
+                    }
+                    if self.cy == 0 {
+                        if self.vtop > 0 {
+                            self.vtop = self.vtop.saturating_sub(1);
+                        }
                     }
                 }
-                if self.cy + self.vtop >= buf_end + 1 {
-                    self.cy = buf_end.saturating_sub(self.vtop);
+                Action::MoveDown => {
+                    if self.cx >= self.get_line_length() {
+                        self.cx = self.get_line_length();
+                    }
+                    if self.cy >= self.vheight as u16 {
+                        self.cy = self.vheight.saturating_sub(1) as u16;
+                        if self.vtop + self.vheight < buf_end {
+                            self.vtop += 1;
+                        }
+                    }
+                    if self.cy + self.vtop >= buf_end + 1 {
+                        self.cy = buf_end.saturating_sub(self.vtop);
+                    }
                 }
+                _ => (),
             }
-            _ => (),
         }
 
         Ok(())
@@ -285,11 +231,14 @@ impl Editor {
             event::Event::Key(ev) => {
                 let code = ev.code;
                 let modifier = ev.modifiers;
+                log!("ev:{:?} \n", ev);
                 match code {
                     event::KeyCode::Char('q') => Ok(Some(Action::Quit)),
                     event::KeyCode::Char('h') | event::KeyCode::Left => Ok(Some(Action::MoveLeft)),
                     event::KeyCode::Char('j') | event::KeyCode::Down => Ok(Some(Action::MoveDown)),
                     event::KeyCode::Char('k') | event::KeyCode::Up => Ok(Some(Action::MoveUp)),
+                    event::KeyCode::Char('u') => Ok(Some(Action::Undo)),
+
                     event::KeyCode::Char('l') | event::KeyCode::Right => {
                         Ok(Some(Action::MoveRight))
                     }
@@ -352,11 +301,100 @@ impl Editor {
             _ => Ok(None),
         }
     }
+    pub fn handle_action(&mut self, event: &Option<Action>) {
+        let buf_end = self.buffer.lines.len() as u16;
+        let line_length = self.get_line_length();
+        let line_no = self.get_buf_line();
+        if let Some(event) = event {
+            match event {
+                Action::Quit => {}
+                Action::Undo => {
+                    self.handle_undo_event();
+                }
+                Action::MoveRight => {
+                    self.cx = self.cx.saturating_add(1);
+                }
+                Action::MoveLeft => {
+                    self.cx = self.cx.saturating_sub(1);
+                    if self.cx < self.vleft {
+                        self.cx = self.vleft;
+                    }
+                }
+                Action::MoveDown => {
+                    self.cy = self.cy.saturating_add(1);
+                }
+                Action::MoveUp => {
+                    self.cy = self.cy.saturating_sub(1);
+                }
+                Action::MoveToEndOfLine => {
+                    self.cx = line_length - 1;
+                }
+                Action::InsertCharCursorPos(c) => {
+                    self.buffer.insert_char(self.cx, line_no, *c);
+                    self.cx += 1;
+                }
+                Action::EnterWaitingMode(char) => {
+                    self.waiting_cmd = Some(*char);
+                }
+                Action::DeleteFullLine => {
+                    if line_length > 0 {
+                        self.undo_actions_list.push(Action::DeleteFullLine);
+                        let line = self.buffer.delete_line(line_no);
+                        self.undo_buffer_list.push((line, line_no));
+                    }
+                }
+                Action::DeleteCharCursorPos => {
+                    let line_no = self.get_buf_line();
+                    if self.cx < line_length {
+                        self.buffer.delete_char(self.cx, line_no);
+                    }
+                }
+                Action::MoveToBeginningOfLine => {
+                    self.cx = 0;
+                }
+                Action::PageUp => {
+                    if self.vtop > 0 {
+                        self.vtop = self.vtop.saturating_sub(self.vheight);
+                    }
+                    if self.vtop == 0 {
+                        self.cy = 0;
+                    }
+                }
+                Action::PageDown => {
+                    if self.vtop + self.vheight < buf_end {
+                        self.vtop += self.vheight;
+                    }
+                    if self.vtop + self.vheight > buf_end {
+                        self.cy = buf_end.saturating_sub(self.vtop);
+                    }
+                }
+                Action::EnterMode(mode) => match mode {
+                    Mode::Insert => self.mode = Mode::Insert,
+                    Mode::Normal => self.mode = Mode::Normal,
+                },
+            };
+        }
+    }
 
     fn get_mode(&self) -> String {
         match self.mode {
             Mode::Insert => String::from("Insert"),
             Mode::Normal => String::from("Normal"),
+        }
+    }
+
+    fn handle_undo_event(&mut self) {
+        let last_cmd = self.undo_actions_list.pop();
+        if let Some(action) = last_cmd {
+            match action {
+                Action::DeleteFullLine => {
+                    let tuple = self.undo_buffer_list.pop();
+                    if let Some((deleted_string, index)) = tuple {
+                        self.buffer.restore_line(deleted_string, index);
+                    }
+                }
+                _ => (),
+            }
         }
     }
 }

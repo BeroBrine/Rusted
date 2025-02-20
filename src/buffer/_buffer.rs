@@ -40,7 +40,11 @@ impl Buffer {
         }
     }
 
-    pub fn delete_line(&mut self, line_no: u16) {
-        self.lines.remove(line_no as usize);
+    pub fn delete_line(&mut self, line_no: u16) -> String {
+        self.lines.remove(line_no as usize)
+    }
+
+    pub fn restore_line(&mut self, line: String, idx: u16) {
+        self.lines.insert(idx as usize, line);
     }
 }
