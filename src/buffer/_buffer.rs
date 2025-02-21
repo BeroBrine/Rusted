@@ -1,3 +1,5 @@
+use crate::log;
+
 pub struct Buffer {
     pub file: Option<String>,
     pub lines: Vec<String>,
@@ -46,5 +48,8 @@ impl Buffer {
 
     pub fn restore_line(&mut self, line: String, idx: u16) {
         self.lines.insert(idx as usize, line);
+    }
+    pub fn insert_line(&mut self , idx: u16) {
+        self.lines.insert(idx as usize, String::new());
     }
 }

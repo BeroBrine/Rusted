@@ -1,7 +1,7 @@
 use std::io::{stdout, Stdout, Write};
 
 use crossterm::{
-    cursor::{self, MoveTo},
+    cursor::{self, MoveTo, SetCursorStyle},
     event::{self, read, KeyModifiers},
     style::{self, Color, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
@@ -20,6 +20,7 @@ pub struct Editor {
     vleft: u16,
     vheight: u16,
     vwidth: u16,
+    cursor_style: SetCursorStyle,
     cx: u16,
     cy: u16,
     waiting_cmd: Option<char>,
@@ -34,6 +35,7 @@ impl Editor {
             buffer: file_buffer,
             mode: Mode::Normal,
             vtop: 0,
+            cursor_style: SetCursorStyle::DefaultUserShape,
             vleft: 0,
             cx: 0,
             cy: 0,
@@ -48,37 +50,29 @@ impl Editor {
     }
 
     fn draw(&mut self) -> anyhow::Result<()> {
+        self.stdout.execute(self.cursor_style)?;
         self.draw_viewport()?;
-        // self.draw_line_number()?;
         self.draw_statusline()?;
         self.stdout.queue(MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
-
-    // fn draw_line_number(&mut self) -> anyhow::Result<()> {
-    //     let buf_len = self.buffer.lines.len() as u16;
-    //
-    //     for i in 0..self.vheight {
-    //         self.stdout.queue(MoveTo(0 , i))?;
-    //         self.stdout.queue(style::Print(i))?;
-    //     }
-    //
-    //
-    //     Ok(())
-    // }
-
     fn draw_viewport(&mut self) -> anyhow::Result<()> {
         let vwidth = self.vwidth;
+        // let buf_end = self.buffer.lines.len().saturating_sub(1) as u16;
         for i in 0..self.vheight {
             let line = self.viewport_line(i);
             let print_line = match line {
                 Some(val) => val,
                 None => String::new(),
             };
-
-            self.stdout.queue(cursor::MoveTo(3, i as u16))?;
+            // let line_no = self.vtop + i + 1;
+            // self.stdout.queue(cursor::MoveTo(0, i))?;
+            // if line_no <= buf_end + 1 {
+            //     self.stdout.queue(style::Print(format!("{line_no} ")))?;
+            // }
+            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
             let format_string = format!("{print_line:<width$}", width = vwidth as usize);
             self.stdout.queue(style::Print(format_string))?;
         }
@@ -163,7 +157,8 @@ impl Editor {
         self.stdout.execute(terminal::EnterAlternateScreen)?;
         self.stdout
             .execute(terminal::Clear(terminal::ClearType::All))?;
-        self.stdout.execute(MoveTo(0, 1))?;
+        self.stdout.execute(self.cursor_style)?;
+        self.stdout.execute(MoveTo(self.cx, self.cy))?;
 
         loop {
             self.draw()?;
@@ -187,22 +182,33 @@ impl Editor {
             match action {
                 Action::MoveRight => {
                     if self.cx >= line_length {
-                        self.cx = line_length.saturating_sub(1);
+                        self.cx = line_length.saturating_sub(1); 
                     }
 
                     if self.cx >= self.vwidth {
                         self.cx = self.vwidth;
                     }
                 }
-
-                Action::MoveUp => {
-                    if self.cx >= line_length {
-                        self.cx = line_length.saturating_sub(1);
+                Action::InsertLineBelowCursor => {
+                    if self.cx > line_length {
+                        self.cx = line_length;
                     }
                 }
+                Action::MoveLeft => {
+                    if self.cx <= self.vleft {
+                        self.cx = self.vleft + 1;
+                    }
+                }
+
+                Action::MoveUp => {
+                    if self.cx > line_length {
+                        self.cx = line_length;
+                    }
+                }
+
                 Action::MoveDown => {
-                    if self.cx >= self.get_line_length() {
-                        self.cx = self.get_line_length();
+                    if self.cx >= line_length {
+                        self.cx = line_length.saturating_sub(1);
                     }
                     if self.cy >= self.vheight as u16 {
                         self.cy = self.vheight.saturating_sub(1) as u16;
@@ -210,8 +216,19 @@ impl Editor {
                             self.vtop += 1;
                         }
                     }
-                    if self.cy + self.vtop >= buf_end + 1 {
+                    if self.cy + self.vtop >= buf_end {
                         self.cy = buf_end.saturating_sub(self.vtop);
+                        self.cy = self.cy.saturating_sub(1);
+                    }
+                }
+                Action::PageDown => {
+                    if self.cy + self.vtop >= buf_end {
+                        self.cy = buf_end.saturating_sub(self.vtop + 1);
+                    }
+                }
+                Action::PageUp => {
+                    if self.vtop == 0 {
+                        self.cy = 0;
                     }
                 }
                 _ => (),
@@ -246,12 +263,14 @@ impl Editor {
                     event::KeyCode::Char('j') | event::KeyCode::Down => Ok(Some(Action::MoveDown)),
                     event::KeyCode::Char('k') | event::KeyCode::Up => Ok(Some(Action::MoveUp)),
                     event::KeyCode::Char('u') => Ok(Some(Action::Undo)),
+                    event::KeyCode::Char('o') => Ok(Some(Action::InsertLineBelowCursor)),
+                    event::KeyCode::Char('G') => Ok(Some(Action::GoToEndOfBuffer)),
 
                     event::KeyCode::Char('l') | event::KeyCode::Right => {
                         Ok(Some(Action::MoveRight))
                     }
                     event::KeyCode::Char('i') => {
-                        self.stdout.execute(cursor::EnableBlinking)?;
+                        self.cursor_style = SetCursorStyle::BlinkingBar;
                         Ok(Some(Action::EnterMode(Mode::Insert)))
                     }
                     event::KeyCode::Char('$') => Ok(Some(Action::MoveToEndOfLine)),
@@ -273,6 +292,8 @@ impl Editor {
 
                     event::KeyCode::Char('d') => Ok(Some(Action::EnterWaitingMode('d'))),
                     event::KeyCode::Char('x') => Ok(Some(Action::DeleteCharCursorPos)),
+                    event::KeyCode::Char('z') => Ok(Some(Action::EnterWaitingMode('z'))),
+                    event::KeyCode::Char('g') => Ok(Some(Action::EnterWaitingMode('g'))),
 
                     _ => Ok(None),
                 }
@@ -283,10 +304,11 @@ impl Editor {
     }
 
     fn handle_insert_mode(&mut self, event: event::Event) -> anyhow::Result<Option<Action>> {
+        self.cursor_style = SetCursorStyle::BlinkingBar;
         match event {
             event::Event::Key(key) => match key.code {
                 event::KeyCode::Esc => {
-                    self.stdout.execute(cursor::DisableBlinking)?;
+                    self.cursor_style = SetCursorStyle::DefaultUserShape;
                     Ok(Some(Action::EnterMode(Mode::Normal)))
                 }
                 event::KeyCode::Char(c) => Ok(Some(Action::InsertCharCursorPos(c))),
@@ -305,6 +327,21 @@ impl Editor {
                 },
                 _ => Ok(None),
             },
+            'z' => match ev {
+                event::Event::Key(key) => match key.code {
+                    event::KeyCode::Char('z') => Ok(Some(Action::CenterLineToViewport)),
+                    _ => Ok(None),
+                },
+
+                _ => Ok(None),
+            },
+            'g' => match ev {
+                event::Event::Key(key) => match key.code {
+                    event::KeyCode::Char('g') => Ok(Some(Action::GoToStartOfBuffer)),
+                    _ => Ok(None),
+                },
+                _ => Ok(None),
+            },
 
             _ => Ok(None),
         }
@@ -316,6 +353,24 @@ impl Editor {
         if let Some(event) = event {
             match event {
                 Action::Quit => {}
+                Action::InsertLineBelowCursor => {
+                    let idx = self.vtop + self.cy + 1;
+                    self.buffer.insert_line(idx);
+                    self.cy += 1;
+                    self.cursor_style = SetCursorStyle::BlinkingBar;
+                    self.mode = Mode::Insert;
+                }
+                Action::GoToEndOfBuffer => {
+                    self.vtop = buf_end.saturating_sub(self.vheight);
+                    self.cy = buf_end.saturating_sub(self.vtop);
+                    self.cy = self.cy.saturating_sub(1);
+                }
+                Action::GoToStartOfBuffer => {
+                    if self.vtop > 0 {
+                        self.vtop = 0;
+                    }
+                    self.cy = 0;
+                }
                 Action::Undo => {
                     self.handle_undo_event();
                 }
@@ -324,9 +379,6 @@ impl Editor {
                 }
                 Action::MoveLeft => {
                     self.cx = self.cx.saturating_sub(1);
-                    if self.cx < self.vleft {
-                        self.cx = self.vleft;
-                    }
                 }
                 Action::MoveDown => {
                     self.cy = self.cy.saturating_add(1);
@@ -343,6 +395,7 @@ impl Editor {
                     self.cx = line_length - 1;
                 }
                 Action::InsertCharCursorPos(c) => {
+                    // let idx = self.cx.saturating_sub(self.vleft + 1);
                     self.buffer.insert_char(self.cx, line_no, *c);
                     self.cx += 1;
                 }
@@ -350,12 +403,10 @@ impl Editor {
                     self.waiting_cmd = Some(*char);
                 }
                 Action::DeleteFullLine => {
-                    if line_length > 0 {
-                        self.undo_actions_list.push(Action::DeleteFullLine);
-                        log!("deleting line at {} \n", line_no);
-                        let line = self.buffer.delete_line(line_no);
-                        self.undo_buffer_list.push((line, line_no));
-                    }
+                    self.undo_actions_list.push(Action::DeleteFullLine);
+                    log!("deleting line at {} \n", line_no);
+                    let line = self.buffer.delete_line(line_no);
+                    self.undo_buffer_list.push((line, line_no));
                 }
                 Action::DeleteCharCursorPos => {
                     let line_no = self.get_buf_line();
@@ -382,15 +433,26 @@ impl Editor {
                         self.cy = buf_end.saturating_sub(self.vtop);
                     }
                 }
+                Action::CenterLineToViewport => {
+                    let index = self.get_buf_line();
+                    self.vtop = index.saturating_sub(self.vheight / 2);
+                    self.cy = index.saturating_sub(self.vtop);
+                }
                 Action::EnterMode(mode) => match mode {
-                    Mode::Insert => self.mode = Mode::Insert,
-                    Mode::Normal => self.mode = Mode::Normal,
+                    Mode::Insert => {
+                        self.cursor_style = SetCursorStyle::BlinkingBar;
+                        self.mode = Mode::Insert;
+                    }
+                    Mode::Normal => {
+                        self.cursor_style = SetCursorStyle::DefaultUserShape;
+                        self.mode = Mode::Normal;
+                    }
                 },
             };
         }
     }
 
-    fn get_mode(&self) -> String {
+    fn get_mode(&mut self) -> String {
         match self.mode {
             Mode::Insert => String::from("Insert"),
             Mode::Normal => String::from("Normal"),
@@ -404,6 +466,7 @@ impl Editor {
                 Action::DeleteFullLine => {
                     let tuple = self.undo_buffer_list.pop();
                     if let Some((deleted_string, index)) = tuple {
+                        // idk how i thought this out but this works.
                         if self.vtop <= index && index <= self.vtop + self.vheight - 1 {
                             // inside the viewport
                             self.cy = index.saturating_sub(self.vtop);
@@ -416,6 +479,7 @@ impl Editor {
                         }
                     }
                 }
+
                 _ => (),
             }
         }
