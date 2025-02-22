@@ -1,4 +1,4 @@
-use crate::log;
+use crate::{editor::main_editor::InsertChanges, log};
 
 pub struct Buffer {
     pub file: Option<String>,
@@ -49,7 +49,20 @@ impl Buffer {
     pub fn restore_line(&mut self, line: String, idx: u16) {
         self.lines.insert(idx as usize, line);
     }
-    pub fn insert_line(&mut self , idx: u16) {
+    pub fn insert_line(&mut self, idx: u16) {
         self.lines.insert(idx as usize, String::new());
+    }
+
+    pub fn remove_insert_changes(&mut self, insert_changes: InsertChanges) {
+        let indexes = insert_changes.index;
+        let starting_index = indexes.0 as usize;
+        let ending_index = indexes.1 as usize;
+        let line_no = insert_changes.line_no;
+
+        let mut string = self.lines.remove(line_no as usize);
+        string.replace_range(starting_index..=ending_index, "");
+        log!("{} \n" , string);
+        self.lines.insert(line_no as usize, string);
+        
     }
 }

@@ -1,5 +1,7 @@
-use super::mode::Mode;
+use super::{main_editor::InsertChanges, mode::Mode};
 
+
+#[derive(Debug)]
 pub enum Action {
     Quit,
     MoveUp,
@@ -10,6 +12,7 @@ pub enum Action {
     MoveToBeginningOfLine,
     InsertCharCursorPos(char),
     DeleteCharCursorPos,
+    UndoInsertChanges(InsertChanges), 
     InsertLineBelowCursor,
     GoToEndOfBuffer,
     PageUp,

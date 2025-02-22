@@ -11,6 +11,12 @@ use super::action::Action;
 use super::mode::Mode;
 use crate::{log, Buffer};
 
+#[derive(Debug)]
+pub struct InsertChanges {
+    pub index: (u16, u16),
+    pub line_no: u16,
+}
+
 pub struct Editor {
     buffer: Buffer,
     stdout: Stdout,
@@ -25,6 +31,7 @@ pub struct Editor {
     cy: u16,
     waiting_cmd: Option<char>,
     undo_actions_list: Vec<Action>,
+    undo_cursor_pos: (u16, u16), // insert mode enter and exit cursor pos
     undo_buffer_list: Vec<(String, u16)>, // string and the index
 }
 
@@ -41,6 +48,7 @@ impl Editor {
             cy: 0,
             vheight: size.1 - 2,
             vwidth: size.0,
+            undo_cursor_pos: (0, 0),
             size,
             undo_actions_list: vec![],
             undo_buffer_list: vec![],
@@ -182,7 +190,7 @@ impl Editor {
             match action {
                 Action::MoveRight => {
                     if self.cx >= line_length {
-                        self.cx = line_length.saturating_sub(1); 
+                        self.cx = line_length.saturating_sub(1);
                     }
 
                     if self.cx >= self.vwidth {
@@ -196,7 +204,7 @@ impl Editor {
                 }
                 Action::MoveLeft => {
                     if self.cx <= self.vleft {
-                        self.cx = self.vleft + 1;
+                        self.cx = self.vleft;
                     }
                 }
 
@@ -270,8 +278,7 @@ impl Editor {
                         Ok(Some(Action::MoveRight))
                     }
                     event::KeyCode::Char('i') => {
-                        self.cursor_style = SetCursorStyle::BlinkingBar;
-                        Ok(Some(Action::EnterMode(Mode::Insert)))
+                        return self.enter_insert_mode();
                     }
                     event::KeyCode::Char('$') => Ok(Some(Action::MoveToEndOfLine)),
                     event::KeyCode::Char('0') => Ok(Some(Action::MoveToBeginningOfLine)),
@@ -303,14 +310,43 @@ impl Editor {
         }
     }
 
-    fn handle_insert_mode(&mut self, event: event::Event) -> anyhow::Result<Option<Action>> {
+    fn enter_insert_mode(&mut self) -> anyhow::Result<Option<Action>> {
         self.cursor_style = SetCursorStyle::BlinkingBar;
+        log!("entered insert mode when cx was :{} \n", self.cx);
+        self.undo_cursor_pos.0 = self.cx;
+        self.mode = Mode::Insert;
+        Ok(Some(Action::EnterMode(Mode::Insert)))
+    }
+
+    fn enter_normal_mode(&mut self) -> anyhow::Result<Option<Action>> {
+        self.cursor_style = SetCursorStyle::DefaultUserShape;
+        self.undo_cursor_pos.1 = if self.cx == 1 {
+            self.cx
+        } else {
+            self.cx.saturating_sub(1)
+        };
+
+        log!("the tuple is now {:?} \n", self.undo_cursor_pos);
+        if self.undo_cursor_pos.0 != self.undo_cursor_pos.1 {
+            let insert_changes = InsertChanges {
+                index: self.undo_cursor_pos,
+                line_no: self.get_buf_line(),
+            };
+            self.undo_actions_list
+                .push(Action::UndoInsertChanges(insert_changes));
+            log!(
+                "the undo aciton list is now {:?} \n",
+                self.undo_actions_list
+            );
+        }
+        self.mode = Mode::Normal;
+        Ok(Some(Action::EnterMode(Mode::Normal)))
+    }
+
+    fn handle_insert_mode(&mut self, event: event::Event) -> anyhow::Result<Option<Action>> {
         match event {
             event::Event::Key(key) => match key.code {
-                event::KeyCode::Esc => {
-                    self.cursor_style = SetCursorStyle::DefaultUserShape;
-                    Ok(Some(Action::EnterMode(Mode::Normal)))
-                }
+                event::KeyCode::Esc => self.enter_normal_mode(),
                 event::KeyCode::Char(c) => Ok(Some(Action::InsertCharCursorPos(c))),
                 _ => Ok(None),
             },
@@ -355,10 +391,11 @@ impl Editor {
                 Action::Quit => {}
                 Action::InsertLineBelowCursor => {
                     let idx = self.vtop + self.cy + 1;
+                    log!("the idx is {} \n", idx);
                     self.buffer.insert_line(idx);
                     self.cy += 1;
                     self.cursor_style = SetCursorStyle::BlinkingBar;
-                    self.mode = Mode::Insert;
+                    let _ = self.enter_insert_mode();
                 }
                 Action::GoToEndOfBuffer => {
                     self.vtop = buf_end.saturating_sub(self.vheight);
@@ -448,6 +485,7 @@ impl Editor {
                         self.mode = Mode::Normal;
                     }
                 },
+                _ => (),
             };
         }
     }
@@ -478,6 +516,20 @@ impl Editor {
                             self.cy = index.saturating_sub(self.vtop);
                         }
                     }
+                }
+                Action::UndoInsertChanges(insert_changes) => {
+                    let index = insert_changes.line_no;
+
+                    if self.vtop <= index && index <= self.vtop + self.vheight - 1 {
+                        self.cy = index.saturating_sub(self.vtop);
+                        self.cx = insert_changes.index.0;
+                    } else {
+                        // outside the viewport
+                        self.vtop = index.saturating_sub(self.vheight / 2);
+                        self.cy = index.saturating_sub(self.vtop);
+                        self.cx = insert_changes.index.0;
+                    }
+                    self.buffer.remove_insert_changes(insert_changes);
                 }
 
                 _ => (),
