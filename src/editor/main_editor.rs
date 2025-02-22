@@ -15,6 +15,7 @@ use crate::{log, Buffer};
 pub struct InsertChanges {
     pub index: (u16, u16),
     pub line_no: u16,
+    pub buf_len: u16,
 }
 
 pub struct Editor {
@@ -331,13 +332,10 @@ impl Editor {
             let insert_changes = InsertChanges {
                 index: self.undo_cursor_pos,
                 line_no: self.get_buf_line(),
+                buf_len: self.buffer.lines.len().saturating_sub(1) as u16,
             };
             self.undo_actions_list
                 .push(Action::UndoInsertChanges(insert_changes));
-            log!(
-                "the undo aciton list is now {:?} \n",
-                self.undo_actions_list
-            );
         }
         self.mode = Mode::Normal;
         Ok(Some(Action::EnterMode(Mode::Normal)))
@@ -394,7 +392,7 @@ impl Editor {
                     log!("the idx is {} \n", idx);
                     self.buffer.insert_line(idx);
                     self.cy += 1;
-                    self.cursor_style = SetCursorStyle::BlinkingBar;
+                    self.cx = 0;
                     let _ = self.enter_insert_mode();
                 }
                 Action::GoToEndOfBuffer => {
@@ -409,6 +407,7 @@ impl Editor {
                     self.cy = 0;
                 }
                 Action::Undo => {
+                    log!("the list is {:?} \n", self.undo_actions_list);
                     self.handle_undo_event();
                 }
                 Action::MoveRight => {
@@ -508,13 +507,12 @@ impl Editor {
                         if self.vtop <= index && index <= self.vtop + self.vheight - 1 {
                             // inside the viewport
                             self.cy = index.saturating_sub(self.vtop);
-                            self.buffer.restore_line(deleted_string, index);
                         } else {
                             // outside the viewport
-                            self.buffer.restore_line(deleted_string, index);
                             self.vtop = index.saturating_sub(self.vheight / 2);
                             self.cy = index.saturating_sub(self.vtop);
                         }
+                        self.buffer.restore_line(deleted_string, index);
                     }
                 }
                 Action::UndoInsertChanges(insert_changes) => {

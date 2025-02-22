@@ -60,9 +60,16 @@ impl Buffer {
         let line_no = insert_changes.line_no;
 
         let mut string = self.lines.remove(line_no as usize);
+        log!("the removed string is :{}" , string);
         string.replace_range(starting_index..=ending_index, "");
-        log!("{} \n" , string);
-        self.lines.insert(line_no as usize, string);
-        
+        log!("crashed here? \n");
+        log!(
+            "replacing line at :{} , buffer len is :{} \n",
+            line_no,
+            self.lines.len() - 1
+        );
+        if !string.trim().is_empty() {
+            self.lines.insert(line_no as usize, string);
+        }
     }
 }
