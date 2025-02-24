@@ -2,7 +2,6 @@
 
 A lightweight, Vim-inspired text editor written in Rust.
 
-
 ## Overview
 
 Rusted was born from my love for Vim and desire to learn Rust programming. As Vim has been my favorite editor for years, I wanted to combine the elegant modal editing philosophy that has made me productive with my journey into Rust development. This project serves both as a practical learning experience and as a tribute to the editor that has shaped my workflow.
@@ -72,6 +71,7 @@ rusted file1.rs file2.rs
 - `zz`: Center view on cursor
 
 
+### Configuration File - Coming Soon
 ```toml
 # Example configuration
 [editor]
@@ -82,16 +82,6 @@ theme = "monokai"
 [keybindings]
 # Custom keybindings can be defined here
 ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## Acknowledgments
 
