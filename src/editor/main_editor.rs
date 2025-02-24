@@ -463,6 +463,7 @@ impl Editor {
             _ => Ok(None),
         }
     }
+
     pub fn handle_action(&mut self, event: &Option<Action>) {
         let buf_end = self.buffer.lines.len() as u16;
         let line_length = self.get_line_length();

@@ -32,26 +32,12 @@ By reimplementing the core features that make Vim special, I'm gaining deeper in
 - **Theme Support**: Import your favorite theme in rusted.
 - **Custom Configuration**: Change Keybindings using custom configuration file.
 
-## Installation
-
-```bash
-# Install from cargo
-cargo install rusted
-
-# Or build from source
-git clone https://github.com/yourusername/rusted.git
-cd rusted
-cargo build --release
-```
 
 ## Usage
 
 ```bash
 # Open a file
-rusted path/to/file.rs
-
-# Open multiple files
-rusted file1.rs file2.rs
+cargo run -- file.rs
 ```
 
 ## Keybindings
