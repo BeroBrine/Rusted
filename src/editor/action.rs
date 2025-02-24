@@ -1,4 +1,4 @@
-use super::{main_editor::InsertChanges, mode::Mode};
+use super::{main_editor::InsertModeTextAddInfo, mode::Mode};
 
 
 #[derive(Debug)]
@@ -12,7 +12,7 @@ pub enum Action {
     MoveToBeginningOfLine,
     InsertCharCursorPos(char),
     DeleteCharCursorPos,
-    UndoInsertChanges(InsertChanges), 
+    UndoInsertModeTextAdd(InsertModeTextAddInfo), 
     InsertLineBelowCursor,
     GoToEndOfBuffer,
     PageUp,
@@ -23,4 +23,5 @@ pub enum Action {
     Undo,
     CenterLineToViewport,
     GoToStartOfBuffer,
+    Backspace,
 }

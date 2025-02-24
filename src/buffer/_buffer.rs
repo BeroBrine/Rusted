@@ -1,4 +1,4 @@
-use crate::{editor::main_editor::InsertChanges, log};
+use crate::editor::main_editor::InsertModeTextAddInfo;
 
 pub struct Buffer {
     pub file: Option<String>,
@@ -6,22 +6,26 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn from_file(file: Option<String>) -> Self {
-        if let Some(val) = &file {
-            println!("the value is {} ", val);
-        }
-
+    pub fn new(file: Option<String>, content: Option<String>) -> Self {
         let lines = match &file {
-            Some(val) => std::fs::read_to_string(val)
-                .unwrap()
-                .lines()
-                .map(|s| s.to_string())
-                .collect(),
+            Some(_) => content.unwrap().lines().map(|s| s.to_string()).collect(),
             None => vec![],
         };
-
         Self { file, lines }
     }
+
+    pub fn from_file(file: Option<String>) -> Self {
+        let buf = match &file {
+            Some(str) => Self::new(
+                Some(str.to_string()),
+                Some(std::fs::read_to_string(str).unwrap()),
+            ),
+            None => Self::new(file, None),
+        };
+
+        buf
+    }
+
     pub fn get(&self, line: usize) -> Option<String> {
         if self.lines.len() > line {
             return Some(self.lines[line].clone());
@@ -53,23 +57,21 @@ impl Buffer {
         self.lines.insert(idx as usize, String::new());
     }
 
-    pub fn remove_insert_changes(&mut self, insert_changes: InsertChanges) {
+    pub fn remove_insert_changes(&mut self, insert_changes: InsertModeTextAddInfo) {
         let indexes = insert_changes.index;
         let starting_index = indexes.0 as usize;
         let ending_index = indexes.1 as usize;
         let line_no = insert_changes.line_no;
 
         let mut string = self.lines.remove(line_no as usize);
-        log!("the removed string is :{}" , string);
         string.replace_range(starting_index..=ending_index, "");
-        log!("crashed here? \n");
-        log!(
-            "replacing line at :{} , buffer len is :{} \n",
-            line_no,
-            self.lines.len() - 1
-        );
         if !string.trim().is_empty() {
             self.lines.insert(line_no as usize, string);
         }
+    }
+
+    pub fn viewport_buf(&self, vtop: usize, vheight: usize) -> String {
+        let height = std::cmp::min(vtop + vheight , self.lines.len());
+        self.lines[vtop..height].join("\n")
     }
 }
