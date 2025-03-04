@@ -71,7 +71,7 @@ impl Buffer {
     }
 
     pub fn viewport_buf(&self, vtop: usize, vheight: usize) -> String {
-        let height = std::cmp::min(vtop + vheight , self.lines.len());
+        let height = std::cmp::min(vtop + vheight, self.lines.len());
         self.lines[vtop..height].join("\n")
     }
 }

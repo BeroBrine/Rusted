@@ -3,15 +3,20 @@ use std::io::{stdout, Stdout, Write};
 use crossterm::{
     cursor::{self, MoveTo, SetCursorStyle},
     event::{self, read, KeyModifiers},
-    style::{self, Color, Stylize},
+    style::{self, Color, StyledContent, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
+
 use tree_sitter::{Parser, Query, QueryCursor};
 use tree_sitter_rust::HIGHLIGHT_QUERY;
 
 use super::action::Action;
 use super::mode::Mode;
-use crate::{log, Buffer};
+use crate::{
+    log,
+    theme::_theme::{Style, Theme},
+    Buffer,
+};
 
 #[derive(Debug)]
 pub struct InsertModeTextAddInfo {
@@ -21,13 +26,20 @@ pub struct InsertModeTextAddInfo {
 }
 
 #[derive(Debug)]
-pub struct ColorInfo {
+pub struct StyleInfo {
     start: usize,
     end: usize,
-    color: Color,
+    style: Style,
+}
+
+impl StyleInfo {
+    fn contains(&self, pos: usize) -> bool {
+        pos >= self.start && pos < self.end
+    }
 }
 
 pub struct Editor {
+    theme: Theme,
     buffer: Buffer,
     stdout: Stdout,
     mode: Mode,
@@ -40,16 +52,16 @@ pub struct Editor {
     cx: u16,
     cy: u16,
     waiting_cmd: Option<char>,
-    syntax_highlight: Vec<ColorInfo>,
     undo_actions_list: Vec<Action>,
     undo_cursor_pos: (u16, u16), // insert mode enter and exit cursor pos
     undo_buffer_list: Vec<(String, u16)>, // string and the index
 }
 
 impl Editor {
-    pub fn new(file_buffer: Buffer) -> anyhow::Result<Self> {
+    pub fn new(theme: Theme, file_buffer: Buffer) -> anyhow::Result<Self> {
         let size = terminal::size()?;
         Ok(Editor {
+            theme,
             buffer: file_buffer,
             mode: Mode::Normal,
             vtop: 0,
@@ -61,7 +73,6 @@ impl Editor {
             vwidth: size.0,
             undo_cursor_pos: (0, 0),
             size,
-            syntax_highlight: vec![],
             undo_actions_list: vec![],
             undo_buffer_list: vec![],
             waiting_cmd: None,
@@ -71,9 +82,12 @@ impl Editor {
 
     fn draw(&mut self) -> anyhow::Result<()> {
         self.stdout.execute(self.cursor_style)?;
+        self.stdout.execute(cursor::Hide)?;
         self.draw_viewport()?;
+
         self.draw_statusline()?;
         log!("moving to :{} and :{} \n", self.cx, self.cy);
+        self.stdout.execute(cursor::Show)?;
         self.stdout.queue(MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
@@ -85,7 +99,6 @@ impl Editor {
             .viewport_buf(self.vtop as usize, self.vheight as usize);
 
         let color_info = self.highlight(&vbuffer)?;
-        self.syntax_highlight = color_info;
 
         for i in 0..self.vheight {
             self.stdout.queue(cursor::MoveTo(0, i))?;
@@ -95,48 +108,63 @@ impl Editor {
 
         let mut x = 0;
         let mut y = 0;
-        let mut current_color: Option<&ColorInfo> = None;
 
         for (pos, ch) in vbuffer.chars().enumerate() {
+            let mut style_for_position = match color_info.iter().find(|si| si.contains(pos)) {
+                Some(val) => val.style.clone(),
+                None => self.theme.style.clone(),
+            };
             if ch == '\n' {
+                self.fill_line(x, y, &mut style_for_position)?;
                 y += 1;
                 if y >= self.vheight {
                     break;
                 }
                 x = 0;
                 continue;
-            }
-
-            if let Some(color_info) = self.syntax_highlight.iter().find(|ci| ci.start == pos) {
-                current_color = Some(color_info);
-            } else if let Some(color_info) = current_color {
-                if color_info.end == pos {
-                    current_color = None;
-                }
-            }
+            };
 
             if x < self.vwidth {
-                self.stdout.queue(MoveTo(x, y))?;
-
-                match current_color {
-                    Some(color_info) => {
-                        self.stdout
-                            .queue(style::PrintStyledContent(ch.with(color_info.color)))?;
-                    }
-                    None => {
-                        self.stdout.queue(style::Print(ch))?;
-                    }
-                }
+                self.fill_line(x, y, &mut style_for_position)?;
+                self.print_char(x, y, ch, &mut style_for_position)?;
             }
 
             x += 1;
         }
 
-        for i in (y + 1)..self.vheight {
-            self.stdout.queue(cursor::MoveTo(0, i))?;
-            self.stdout
-                .queue(style::Print(" ".repeat(self.vwidth as usize)))?;
-        }
+        Ok(())
+    }
+
+    fn print_char(
+        &mut self,
+        x: u16,
+        y: u16,
+        c: char,
+        style_info: &mut Style,
+    ) -> anyhow::Result<()> {
+        self.stdout.queue(MoveTo(x, y))?;
+        let content_style = style_info.convert_to_style(&self.theme.style);
+
+        let content = StyledContent::new(content_style, c);
+        log!("{:#?}", content);
+
+        self.stdout
+            .queue(MoveTo(x, y))?
+            .queue(style::PrintStyledContent(content))?;
+
+        Ok(())
+    }
+
+    fn fill_line(&mut self, x: u16, y: u16, style_info: &mut Style) -> anyhow::Result<()> {
+        let width = (self.vwidth - x) as usize;
+        let line_fill_string = " ".repeat(width);
+        let style = style_info.convert_to_style(&self.theme.style);
+
+        let styled_content = StyledContent::new(style, line_fill_string);
+
+        self.stdout
+            .queue(MoveTo(x, y))?
+            .queue(style::PrintStyledContent(styled_content))?;
 
         Ok(())
     }
@@ -389,7 +417,7 @@ impl Editor {
         Ok(Some(Action::EnterMode(Mode::Normal)))
     }
 
-    fn highlight(&self, code: &str) -> anyhow::Result<Vec<ColorInfo>> {
+    fn highlight(&self, code: &str) -> anyhow::Result<Vec<StyleInfo>> {
         let mut parser = Parser::new();
 
         let language = &tree_sitter_rust::language();
@@ -398,27 +426,25 @@ impl Editor {
         let tree = parser.parse(&code, None).expect("parsing code");
         let query = Query::new(*language, HIGHLIGHT_QUERY)?;
         let mut cursor = QueryCursor::new();
-        let mut color_vec: Vec<ColorInfo> = Vec::new();
+        let mut color_vec: Vec<StyleInfo> = Vec::new();
+
         let matches = cursor.matches(&query, tree.root_node(), code.as_bytes());
+
         for mat in matches {
             for capt in mat.captures {
                 let node = capt.node;
                 let start = node.start_byte();
                 let end = node.end_byte();
 
-                let color = match query.capture_names()[capt.index as usize].as_str() {
-                    "function" => Some(Color::Blue),
-                    "string" => Some(Color::Red),
-                    "keyword" => Some(Color::DarkBlue),
-                    _ => None,
-                };
-                if let Some(color) = color {
-                    color_vec.push(ColorInfo { start, end, color })
+                let scope = query.capture_names()[capt.index as usize].as_str();
+
+                let style = self.theme.get_style(&scope);
+
+                if let Some(style) = style {
+                    color_vec.push(StyleInfo { start, end, style })
                 }
             }
         }
-
-        log!("color vec: {:?} \n", color_vec);
 
         Ok(color_vec)
     }
