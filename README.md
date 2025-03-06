@@ -23,13 +23,13 @@ By reimplementing the core features that make Vim special, I'm gaining deeper in
   - Center view (`zz`) 
 - **Chorded Key Support**: Properly handles multi-key commands like `dd` and `zz`
 - **Syntax Highlighting**: Support for common programming languages
+- **Theme Support**: Import your favorite theme in rusted.
 
 ### Coming Soon
 
 - **LSP Integration**: Code intelligence with the Language Server Protocol
 - **Vim Command Line**: Support for ex commands with `:` prefix
 - **Extended Keybindings**: More advanced Vim motions and text objects
-- **Theme Support**: Import your favorite theme in rusted.
 - **Custom Configuration**: Change Keybindings using custom configuration file.
 
 
