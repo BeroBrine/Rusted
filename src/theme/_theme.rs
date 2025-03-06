@@ -1,4 +1,4 @@
-use crossterm::style::{Color, ContentStyle};
+use crossterm::style::{Attribute, Attributes, Color, ContentStyle};
 
 #[derive(Debug, Default, Clone)]
 pub struct Style {
@@ -34,7 +34,7 @@ impl Theme {
 }
 
 impl Style {
-    pub fn convert_to_style(&mut self, fallback_style: &Style) -> ContentStyle {
+    pub fn convert_to_style(&self, fallback_style: &Style) -> ContentStyle {
         let foreground_color = match self.fg {
             Some(col) => col,
             None => fallback_style.fg.unwrap(),
@@ -44,10 +44,19 @@ impl Style {
             Some(col) => col,
             None => fallback_style.bg.unwrap(),
         };
+        let mut attributes = Attributes::default();
+
+        if self.italic {
+            attributes.set(Attribute::Italic);
+        }
+        if self.bold {
+            attributes.set(Attribute::Bold);
+        }
 
         ContentStyle {
             foreground_color: Some(foreground_color),
             background_color: Some(background_color),
+            attributes,
             ..Default::default()
         }
     }

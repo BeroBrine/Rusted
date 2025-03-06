@@ -7,9 +7,6 @@ use crossterm::{
     terminal, ExecutableCommand, QueueableCommand,
 };
 
-use tree_sitter::{Parser, Query, QueryCursor};
-use tree_sitter_rust::HIGHLIGHT_QUERY;
-
 use super::action::Action;
 use super::mode::Mode;
 use crate::{
@@ -17,6 +14,8 @@ use crate::{
     theme::_theme::{Style, Theme},
     Buffer,
 };
+use tree_sitter::{Parser, Query, QueryCursor};
+use tree_sitter_rust::HIGHLIGHT_QUERY;
 
 #[derive(Debug)]
 pub struct InsertModeTextAddInfo {
@@ -60,14 +59,15 @@ pub struct Editor {
 impl Editor {
     pub fn new(theme: Theme, file_buffer: Buffer) -> anyhow::Result<Self> {
         let size = terminal::size()?;
+        let gutter_width = (file_buffer.lines.len().to_string().len() + 2) as u16;
         Ok(Editor {
             theme,
             buffer: file_buffer,
             mode: Mode::Normal,
             vtop: 0,
             cursor_style: SetCursorStyle::DefaultUserShape,
-            vleft: 0,
-            cx: 0,
+            vleft: gutter_width,
+            cx: gutter_width,
             cy: 0,
             vheight: size.1 - 2,
             vwidth: size.0,
@@ -83,13 +83,36 @@ impl Editor {
     fn draw(&mut self) -> anyhow::Result<()> {
         self.stdout.execute(self.cursor_style)?;
         self.stdout.execute(cursor::Hide)?;
+        self.draw_gutter()?;
         self.draw_viewport()?;
-
         self.draw_statusline()?;
         log!("moving to :{} and :{} \n", self.cx, self.cy);
         self.stdout.execute(cursor::Show)?;
         self.stdout.queue(MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
+        Ok(())
+    }
+
+    fn gutter_width(&self) -> usize {
+        let len = self.buffer.lines.len();
+        let len = len.to_string().len();
+        len + 1
+    }
+
+    fn draw_gutter(&mut self) -> anyhow::Result<()> {
+        let width = self.gutter_width();
+
+        for i in 0..self.vheight {
+            log!("i is {} : vtop is :{}  \n", i, self.vtop);
+            self.stdout
+                .queue(MoveTo(0, i))?
+                .queue(style::PrintStyledContent(
+                    format!("{n:>width$} ", n = i + 1 + self.vtop, width = width)
+                        .on(self.theme.style.bg.unwrap())
+                        .with(self.theme.style.fg.unwrap()),
+                ))?;
+        }
+
         Ok(())
     }
 
@@ -100,13 +123,13 @@ impl Editor {
 
         let color_info = self.highlight(&vbuffer)?;
 
-        for i in 0..self.vheight {
-            self.stdout.queue(cursor::MoveTo(0, i))?;
-            self.stdout
-                .queue(style::Print(" ".repeat(self.vwidth as usize)))?;
-        }
-
-        let mut x = 0;
+        // for i in 0..self.vheight {
+        //     self.stdout.queue(cursor::MoveTo(0, i))?;
+        //     self.stdout
+        //         .queue(style::Print(" ".repeat(self.vwidth as usize)))?;
+        // }
+        log!("vleft: {} \n", self.vleft);
+        let mut x = self.vleft;
         let mut y = 0;
 
         for (pos, ch) in vbuffer.chars().enumerate() {
@@ -115,12 +138,12 @@ impl Editor {
                 None => self.theme.style.clone(),
             };
             if ch == '\n' {
-                self.fill_line(x, y, &mut style_for_position)?;
                 y += 1;
                 if y >= self.vheight {
                     break;
                 }
-                x = 0;
+                x = self.vleft;
+                self.fill_line(x, y, &mut style_for_position)?;
                 continue;
             };
 
@@ -130,6 +153,11 @@ impl Editor {
             }
 
             x += 1;
+        }
+
+        while y < self.vheight {
+            self.fill_line(0, y, &self.theme.style.clone())?;
+            y += 1;
         }
 
         Ok(())
@@ -146,7 +174,6 @@ impl Editor {
         let content_style = style_info.convert_to_style(&self.theme.style);
 
         let content = StyledContent::new(content_style, c);
-        log!("{:#?}", content);
 
         self.stdout
             .queue(MoveTo(x, y))?
@@ -155,7 +182,7 @@ impl Editor {
         Ok(())
     }
 
-    fn fill_line(&mut self, x: u16, y: u16, style_info: &mut Style) -> anyhow::Result<()> {
+    fn fill_line(&mut self, x: u16, y: u16, style_info: &Style) -> anyhow::Result<()> {
         let width = (self.vwidth - x) as usize;
         let line_fill_string = " ".repeat(width);
         let style = style_info.convert_to_style(&self.theme.style);
@@ -228,7 +255,7 @@ impl Editor {
     pub fn get_line_length(&self) -> u16 {
         let line_in_buf = self.get_buf_line();
         if let Some(val) = self.buffer.get(line_in_buf as usize) {
-            return val.len() as u16;
+            return val.len() as u16 + self.vleft;
         }
         0
     }
@@ -294,6 +321,9 @@ impl Editor {
                 }
 
                 Action::MoveDown => {
+                    if self.cx > self.vleft {
+                        self.cx = self.vleft + 2;
+                    }
                     if self.cx >= line_length {
                         self.cx = line_length.saturating_sub(1);
                     }
@@ -440,8 +470,12 @@ impl Editor {
 
                 let style = self.theme.get_style(&scope);
 
-                if let Some(style) = style {
-                    color_vec.push(StyleInfo { start, end, style })
+                if let Some(fetch_style) = style {
+                    color_vec.push(StyleInfo {
+                        start,
+                        end,
+                        style: fetch_style,
+                    })
                 }
             }
         }

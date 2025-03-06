@@ -1,5 +1,4 @@
 use crate::log;
-use std::fs;
 
 use crossterm::style::Color;
 use serde::Deserialize;
@@ -17,8 +16,8 @@ enum VsCodeScope {
 impl From<VsCodeScope> for Vec<String> {
     fn from(value: VsCodeScope) -> Self {
         match value {
-            VsCodeScope::String(s) => vec![s],
-            VsCodeScope::Vec(v) => v,
+            VsCodeScope::String(s) => vec![translate_scope(s)],
+            VsCodeScope::Vec(v) => v.into_iter().map(translate_scope).collect(),
         }
     }
 }
@@ -45,7 +44,6 @@ fn parse_rgb(hexcode: &str) -> anyhow::Result<Color> {
         anyhow::bail!("not a valid hex code");
     }
 
-    // #01f
     let r = &hexcode[1..=2];
     let g = &hexcode[3..=4];
     let b = &hexcode[5..=6];
@@ -82,6 +80,16 @@ impl From<VsCodeTokenColor> for TokenStyle {
             style,
         }
     }
+}
+
+fn translate_scope(vscode_scope: String) -> String {
+    if vscode_scope == "meta.function-call.constructor" {
+        return "constructor".to_string();
+    }
+    if vscode_scope == "meta.annotation.rust" {
+        return "attribute".to_string();
+    }
+    return vscode_scope.to_string();
 }
 
 pub fn parse_theme(file: &str) -> anyhow::Result<Theme> {
